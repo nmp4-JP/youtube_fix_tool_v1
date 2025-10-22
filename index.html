@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube 修正コメント管理ツール v13+</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      gap: 20px;
+      height: 100vh;
+      box-sizing: border-box;
+    }
+
+    .video-section {
+      flex: 2;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .comment-section {
+      flex: 1;
+      border-left: 1px solid #ccc;
+      padding-left: 20px;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      box-sizing: border-box;
+    }
+
+    .video-url-input input,
+    .comment-input input {
+      width: 400px;
+      padding: 5px;
+    }
+
+    .video-url-input button,
+    .comment-input button {
+      padding: 5px 10px;
+      margin-left: 5px;
+    }
+
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      overflow-y: auto;
+      flex-grow: 1;
+      height: 100%;
+    }
+
+    li {
+      margin: 10px 0;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 8px;
+      position: relative;
+    }
+
+    li:hover {
+      background: #f9f9f9;
+    }
+
+    .delete-btn {
+      position: absolute;
+      right: 0;
+      top: 0;
+      background: #f55;
+      color: white;
+      border: none;
+      padding: 3px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8em;
+    }
+
+    .delete-btn:hover {
+      background: #d33;
+    }
+
+    .fix-note {
+      margin-top: 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .fix-note textarea {
+      width: 95%;
+      height: 50px;
+      resize: none;
+      font-size: 0.9em;
+      padding: 5px;
+    }
+
+    .button-group {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .btn {
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 1em;
+      cursor: pointer;
+      box-shadow: 0 3px 6px rgba(0, 0, 0, 0.2);
+      text-align: center;
+    }
+
+    .btn:hover {
+      background: #0056cc;
+    }
+
+    #player-container {
+      position: relative;
+      width: 100%;
+      padding-bottom: 56.25%;
+      margin-top: 10px;
+    }
+
+    #player {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .comment-input {
+      margin-top: 15px;
+      display: flex;
+      align-items: center;
+    }
+
+    h3 {
+      margin-top: 0;
+    }
+
+    #excelInput {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="video-section">
+    <div class="video-url-input">
+      <input id="youtubeUrl" type="text" placeholder="YouTubeのURLを入力" />
+      <button id="loadBtn">読み込み</button>
+    </div>
+
+    <div id="player-container"><div id="player"></div></div>
+
+    <div class="comment-input">
+      <input id="commentText" type="text" placeholder="修正コメントを入力（⌘+Enter で追加）" />
+      <button id="addComment">追加</button>
+    </div>
+
+    <div class="button-group">
+      <button id="undoBtn" class="btn">↩️ 戻る</button>
+      <button id="clearBtn" class="btn">🗑️ オールクリア</button>
+      <button id="importBtn" class="btn">📥 Excelを読み込み</button>
+      <input type="file" id="excelInput" accept=".xlsx" />
+      <button id="downloadBtn" class="btn">📄 修正リストをダウンロード</button>
+    </div>
+  </div>
+
+  <div class="comment-section">
+    <h3>修正コメント一覧</h3>
+    <ul id="commentList"></ul>
+  </div>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script>
+    let player;
+    let comments = [];
+    let historyStack = [];
+    let videoTitle = "YouTube動画";
+    let currentVideoId = null;
+
+    // --- YouTubeプレイヤー ---
+    function onYouTubeIframeAPIReady() {
+      player = new YT.Player("player", {
+        width: "100%",
+        height: "100%",
+        videoId: "dQw4w9WgXcQ",
+        events: {
+          onReady: () => fetchVideoTitle(player.getVideoData().video_id)
+        }
+      });
+    }
+
+    async function fetchVideoTitle(videoId) {
+      try {
+        const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`);
+        const data = await res.json();
+        if (data && data.title) videoTitle = data.title.replace(/[\\/:*?"<>|]/g, "");
+      } catch (e) {
+        console.warn("動画タイトルを取得できませんでした:", e);
+      }
+    }
+
+    function extractVideoId(url) {
+      const match = url.match(/(?:v=|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/);
+      return match ? match[1] : null;
+    }
+
+    document.getElementById("loadBtn").addEventListener("click", async () => {
+      const url = document.getElementById("youtubeUrl").value;
+      const id = extractVideoId(url);
+      if (id && player) {
+        if (currentVideoId && currentVideoId !== id) {
+          localStorage.removeItem("yt_fix_comments");
+          comments = [];
+          renderComments();
+        }
+        currentVideoId = id;
+        player.loadVideoById(id);
+        await fetchVideoTitle(id);
+      } else {
+        alert("有効なYouTube URLを入力してください。");
+      }
+    });
+
+    function backupState() {
+      historyStack.push(JSON.stringify(comments));
+      if (historyStack.length > 20) historyStack.shift();
+    }
+
+    function undo() {
+      if (historyStack.length > 0) {
+        comments = JSON.parse(historyStack.pop());
+        saveComments();
+        renderComments();
+      } else {
+        alert("戻せる履歴がありません。");
+      }
+    }
+
+    document.getElementById("undoBtn").addEventListener("click", undo);
+
+    function addComment() {
+      if (!player || !player.getCurrentTime) return;
+      const text = document.getElementById("commentText").value.trim();
+      if (!text) return;
+      backupState();
+      const time = player.getCurrentTime();
+      comments.push({ id: Date.now(), time, text, note: "" });
+      document.getElementById("commentText").value = "";
+      saveComments();
+      renderComments(true);
+    }
+
+    document.getElementById("addComment").addEventListener("click", addComment);
+
+    document.getElementById("commentText").addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        addComment();
+      }
+    });
+
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = Math.floor(seconds % 60).toString().padStart(2, "0");
+      return `${m}:${s}`;
+    }
+
+    function renderComments(scrollToBottom = false) {
+      const list = document.getElementById("commentList");
+      list.innerHTML = "";
+      comments.sort((a, b) => a.time - b.time).forEach((c) => {
+        const li = document.createElement("li");
+        const mainText = document.createElement("div");
+        mainText.textContent = `[${formatTime(c.time)}] ${c.text}`;
+        mainText.style.cursor = "pointer";
+        mainText.onclick = () => player.seekTo(parseFloat(c.time));
+        const fixNote = document.createElement("div");
+        fixNote.className = "fix-note";
+        const noteLabel = document.createElement("label");
+        noteLabel.textContent = "追記事項：";
+        const textarea = document.createElement("textarea");
+        textarea.value = c.note;
+        textarea.placeholder = "補足や経過などを記入";
+        textarea.oninput = (e) => {
+          backupState();
+          c.note = e.target.value;
+          saveComments();
+        };
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "削除";
+        delBtn.className = "delete-btn";
+        delBtn.onclick = () => {
+          backupState();
+          comments = comments.filter((x) => x.id !== c.id);
+          saveComments();
+          renderComments();
+        };
+        fixNote.appendChild(noteLabel);
+        fixNote.appendChild(textarea);
+        li.appendChild(mainText);
+        li.appendChild(fixNote);
+        li.appendChild(delBtn);
+        list.appendChild(li);
+      });
+      if (scrollToBottom) list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+    }
+
+    document.getElementById("clearBtn").addEventListener("click", () => {
+      if (confirm("すべての修正コメントを削除しますか？")) {
+        backupState();
+        comments = [];
+        saveComments();
+        renderComments();
+      }
+    });
+
+    document.getElementById("downloadBtn").addEventListener("click", () => {
+      if (comments.length === 0) {
+        alert("コメントがありません。");
+        return;
+      }
+      const data = [
+        { 修正済み: "", タイムコード: "", 修正コメント: "", 追記事項: "" },
+        ...comments.map((c) => ({
+          修正済み: "☐",
+          タイムコード: formatTime(c.time),
+          修正コメント: c.text,
+          追記事項: c.note
+        }))
+      ];
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "修正コメント");
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/octet-stream" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${videoTitle}_修正リスト.xlsx`;
+      a.click();
+    });
+
+    document.getElementById("importBtn").addEventListener("click", () => {
+      document.getElementById("excelInput").click();
+    });
+
+    document.getElementById("excelInput").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws);
+      const added = json
+        .filter((r) => r["タイムコード"] && r["修正コメント"])
+        .map((r) => ({
+          id: Date.now() + Math.random(),
+          time: parseTime(r["タイムコード"]),
+          text: r["修正コメント"],
+          note: r["追記事項"] || ""
+        }));
+      backupState();
+      comments = [...comments, ...added];
+      saveComments();
+      renderComments(true);
+      e.target.value = "";
+    });
+
+    function parseTime(str) {
+      if (!str) return 0;
+      const [m, s] = str.split(":").map(Number);
+      return m * 60 + s;
+    }
+
+    function saveComments() {
+      localStorage.setItem("yt_fix_comments", JSON.stringify(comments));
+    }
+
+    function loadComments() {
+      const saved = localStorage.getItem("yt_fix_comments");
+      if (saved) {
+        comments = JSON.parse(saved);
+        renderComments();
+      }
+    }
+
+    window.addEventListener("load", loadComments);
+  </script>
+</body>
+</html>
