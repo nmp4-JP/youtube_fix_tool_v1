@@ -3,24 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YouTube 修正コメント管理ツール v13++（履歴表示対応）</title>
+  <title>YouTube 修正コメント管理ツール v13+++（リサイズ対応）</title>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     body {
       font-family: sans-serif;
       margin: 0;
-      padding: 20px;
       display: flex;
       flex-direction: column;
       height: 100vh;
-      box-sizing: border-box;
+      overflow: hidden;
     }
 
     .main-container {
       display: flex;
-      gap: 20px;
       flex: 1;
       overflow: hidden;
+      padding: 20px;
+      gap: 20px;
+      box-sizing: border-box;
     }
 
     .video-section {
@@ -57,7 +58,6 @@
       margin: 0;
       overflow-y: auto;
       flex-grow: 1;
-      height: 100%;
     }
 
     li {
@@ -155,35 +155,50 @@
       display: none;
     }
 
-    /* 下部の履歴表示エリア */
-    .history-section {
+    /* ===== 履歴エリア ===== */
+    .history-container {
+      position: relative;
+      background: #f9f9f9;
       border-top: 2px solid #ccc;
-      margin-top: 15px;
-      padding-top: 10px;
-      background: #fafafa;
+      overflow: hidden;
       height: 200px;
+      transition: height 0.2s ease;
+    }
+
+    .history-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #eee;
+      padding: 8px 14px;
+      border-bottom: 1px solid #ccc;
+      cursor: ns-resize;
+      user-select: none;
+    }
+
+    .history-header h3 {
+      margin: 0;
+      font-size: 1em;
+    }
+
+    .history-list {
+      padding: 10px 16px;
       overflow-y: auto;
+      height: calc(100% - 40px);
     }
 
     .history-entry {
       margin-bottom: 10px;
-      padding: 8px;
+      background: white;
       border: 1px solid #ddd;
       border-radius: 6px;
-      background: white;
+      padding: 8px;
     }
 
     .history-entry h4 {
-      margin: 0 0 5px 0;
+      margin: 0 0 4px 0;
       font-size: 1em;
       color: #007bff;
-    }
-
-    .history-entry ul {
-      max-height: 120px;
-      overflow-y: auto;
-      margin: 0;
-      padding-left: 20px;
     }
 
     .history-entry li {
@@ -222,8 +237,13 @@
     </div>
   </div>
 
-  <div class="history-section" id="historySection">
-    <h3>📜 読み込んだ修正ファイル一覧</h3>
+  <!-- ===== 下部のリサイズ可能履歴エリア ===== -->
+  <div class="history-container" id="historyContainer">
+    <div class="history-header" id="resizeHandle">
+      <h3>📜 読み込んだ修正ファイル一覧</h3>
+      <span style="color:#666;font-size:0.9em;">ドラッグでサイズ変更</span>
+    </div>
+    <div class="history-list" id="historyList"></div>
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
@@ -231,9 +251,12 @@
     let player;
     let comments = [];
     let historyStack = [];
-    let videoTitle = "YouTube動画";
     let currentVideoId = null;
+    let videoTitle = "YouTube動画";
+    let isResizing = false;
+    let startY, startHeight;
 
+    // ===== YouTubeプレイヤー =====
     function onYouTubeIframeAPIReady() {
       player = new YT.Player("player", {
         width: "100%",
@@ -273,6 +296,7 @@
       }
     });
 
+    // ===== コメント管理 =====
     function backupState() {
       historyStack.push(JSON.stringify(comments));
       if (historyStack.length > 20) historyStack.shift();
@@ -283,9 +307,7 @@
         comments = JSON.parse(historyStack.pop());
         saveComments();
         renderComments();
-      } else {
-        alert("戻せる履歴がありません。");
-      }
+      } else alert("戻せる履歴がありません。");
     });
 
     function addComment() {
@@ -301,138 +323,122 @@
     }
 
     document.getElementById("addComment").addEventListener("click", addComment);
-    document.getElementById("commentText").addEventListener("keydown", (e) => {
+    document.getElementById("commentText").addEventListener("keydown", e => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        e.preventDefault();
-        addComment();
+        e.preventDefault(); addComment();
       }
     });
 
-    function formatTime(seconds) {
-      const m = Math.floor(seconds / 60);
-      const s = Math.floor(seconds % 60).toString().padStart(2, "0");
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60).toString().padStart(2, "0");
       return `${m}:${s}`;
     }
 
-    function renderComments(scrollToBottom = false) {
+    function renderComments(scrollToBottom=false) {
       const list = document.getElementById("commentList");
       list.innerHTML = "";
-      comments.sort((a, b) => a.time - b.time).forEach((c) => {
+      comments.sort((a,b)=>a.time-b.time).forEach(c=>{
         const li = document.createElement("li");
-        const mainText = document.createElement("div");
-        mainText.textContent = `[${formatTime(c.time)}] ${c.text}`;
-        mainText.style.cursor = "pointer";
-        mainText.onclick = () => player.seekTo(parseFloat(c.time));
-        const fixNote = document.createElement("div");
-        fixNote.className = "fix-note";
-        const noteLabel = document.createElement("label");
-        noteLabel.textContent = "追記事項：";
-        const textarea = document.createElement("textarea");
-        textarea.value = c.note;
-        textarea.placeholder = "補足や経過などを記入";
-        textarea.oninput = (e) => {
-          backupState();
-          c.note = e.target.value;
-          saveComments();
-        };
-        const delBtn = document.createElement("button");
-        delBtn.textContent = "削除";
-        delBtn.className = "delete-btn";
-        delBtn.onclick = () => {
-          backupState();
-          comments = comments.filter((x) => x.id !== c.id);
-          saveComments();
-          renderComments();
-        };
-        fixNote.appendChild(noteLabel);
-        fixNote.appendChild(textarea);
-        li.appendChild(mainText);
-        li.appendChild(fixNote);
-        li.appendChild(delBtn);
+        const main = document.createElement("div");
+        main.textContent = `[${formatTime(c.time)}] ${c.text}`;
+        main.style.cursor="pointer";
+        main.onclick=()=>player.seekTo(parseFloat(c.time));
+        const noteDiv=document.createElement("div");
+        noteDiv.className="fix-note";
+        const ta=document.createElement("textarea");
+        ta.value=c.note;
+        ta.placeholder="追記事項を記入";
+        ta.oninput=e=>{backupState();c.note=e.target.value;saveComments();};
+        const del=document.createElement("button");
+        del.className="delete-btn";
+        del.textContent="削除";
+        del.onclick=()=>{backupState();comments=comments.filter(x=>x.id!==c.id);saveComments();renderComments();};
+        noteDiv.appendChild(ta);
+        li.appendChild(main);
+        li.appendChild(noteDiv);
+        li.appendChild(del);
         list.appendChild(li);
       });
-      if (scrollToBottom) list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+      if(scrollToBottom) list.scrollTo({top:list.scrollHeight,behavior:"smooth"});
     }
 
-    document.getElementById("clearBtn").addEventListener("click", () => {
-      if (confirm("すべての修正コメントを削除しますか？")) {
-        backupState();
-        comments = [];
-        saveComments();
-        renderComments();
+    document.getElementById("clearBtn").addEventListener("click",()=>{
+      if(confirm("すべての修正コメントを削除しますか？")){
+        backupState();comments=[];saveComments();renderComments();
       }
     });
 
-    document.getElementById("downloadBtn").addEventListener("click", () => {
-      if (comments.length === 0) return alert("コメントがありません。");
-      const data = [
-        { 修正済み: "", タイムコード: "", 修正コメント: "", 追記事項: "" },
-        ...comments.map((c) => ({
-          修正済み: "☐",
-          タイムコード: formatTime(c.time),
-          修正コメント: c.text,
-          追記事項: c.note
-        }))
-      ];
-      const ws = XLSX.utils.json_to_sheet(data);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "修正コメント");
-      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-      const blob = new Blob([wbout], { type: "application/octet-stream" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `${videoTitle}_修正リスト.xlsx`;
+    document.getElementById("downloadBtn").addEventListener("click",()=>{
+      if(comments.length===0)return alert("コメントがありません。");
+      const data=[{"修正済み":"","タイムコード":"","修正コメント":"","追記事項":""},
+        ...comments.map(c=>({"修正済み":"☐","タイムコード":formatTime(c.time),"修正コメント":c.text,"追記事項":c.note}))];
+      const ws=XLSX.utils.json_to_sheet(data);
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,"修正コメント");
+      const wbout=XLSX.write(wb,{bookType:"xlsx",type:"array"});
+      const blob=new Blob([wbout],{type:"application/octet-stream"});
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download=`${videoTitle}_修正リスト.xlsx`;
       a.click();
     });
 
-    // 📂 過去ファイル読み込み → 下部リスト表示
-    document.getElementById("importBtn").addEventListener("click", () => {
-      document.getElementById("excelInput").click();
+    // ===== 履歴ファイル表示 =====
+    document.getElementById("importBtn").addEventListener("click",()=>document.getElementById("excelInput").click());
+    document.getElementById("excelInput").addEventListener("change",async e=>{
+      const file=e.target.files[0];if(!file)return;
+      const data=await file.arrayBuffer();
+      const wb=XLSX.read(data,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const json=XLSX.utils.sheet_to_json(ws);
+      displayHistory(file.name,json);
+      e.target.value="";
     });
 
-    document.getElementById("excelInput").addEventListener("change", async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const data = await file.arrayBuffer();
-      const wb = XLSX.read(data, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(ws);
-      displayHistory(file.name, json);
-      e.target.value = "";
-    });
-
-    function displayHistory(filename, rows) {
-      const history = document.getElementById("historySection");
-      const entry = document.createElement("div");
-      entry.className = "history-entry";
-      const title = document.createElement("h4");
-      title.textContent = `📁 ${filename}`;
-      const list = document.createElement("ul");
-      rows
-        .filter((r) => r["タイムコード"] && r["修正コメント"])
-        .forEach((r) => {
-          const li = document.createElement("li");
-          li.textContent = `[${r["タイムコード"]}] ${r["修正コメント"]} ${r["追記事項"] ? "（追記: " + r["追記事項"] + "）" : ""}`;
-          list.appendChild(li);
-        });
+    function displayHistory(name,rows){
+      const area=document.getElementById("historyList");
+      const entry=document.createElement("div");
+      entry.className="history-entry";
+      const title=document.createElement("h4");
+      title.textContent=`📁 ${name}`;
+      const ul=document.createElement("ul");
+      rows.filter(r=>r["タイムコード"]&&r["修正コメント"]).forEach(r=>{
+        const li=document.createElement("li");
+        li.textContent=`[${r["タイムコード"]}] ${r["修正コメント"]}${r["追記事項"]?"（追記:"+r["追記事項"]+"）":""}`;
+        ul.appendChild(li);
+      });
       entry.appendChild(title);
-      entry.appendChild(list);
-      history.appendChild(entry);
+      entry.appendChild(ul);
+      area.appendChild(entry);
     }
 
-    function saveComments() {
-      localStorage.setItem("yt_fix_comments", JSON.stringify(comments));
-    }
+    // ===== リサイズ制御 =====
+    const resizeHandle=document.getElementById("resizeHandle");
+    const historyContainer=document.getElementById("historyContainer");
+    resizeHandle.addEventListener("mousedown",e=>{
+      isResizing=true;
+      startY=e.clientY;
+      startHeight=historyContainer.offsetHeight;
+      document.body.style.cursor="ns-resize";
+    });
+    window.addEventListener("mousemove",e=>{
+      if(!isResizing)return;
+      const dy=startY-e.clientY;
+      const newHeight=Math.min(Math.max(startHeight+dy,120),window.innerHeight*0.6);
+      historyContainer.style.height=`${newHeight}px`;
+    });
+    window.addEventListener("mouseup",()=>{
+      if(isResizing){isResizing=false;document.body.style.cursor="";}
+    });
 
-    function loadComments() {
-      const saved = localStorage.getItem("yt_fix_comments");
-      if (saved) {
-        comments = JSON.parse(saved);
-        renderComments();
-      }
+    // ===== 保存・復元 =====
+    function saveComments(){localStorage.setItem("yt_fix_comments",JSON.stringify(comments));}
+    function loadComments(){
+      const saved=localStorage.getItem("yt_fix_comments");
+      if(saved){comments=JSON.parse(saved);renderComments();}
     }
-
-    window.addEventListener("load", loadComments);
+    window.addEventListener("load",loadComments);
   </script>
 </body>
 </html>
