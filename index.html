@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YouTube 修正コメント管理ツール v13+++（リサイズ対応）</title>
+  <title>YouTube 修正コメント管理ツール v13++++</title>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     body {
@@ -266,17 +266,29 @@
       });
     }
 
+    // ===== URL解析（全形式対応）=====
+    function extractVideoId(url) {
+      if (!url) return null;
+      url = url.trim();
+      try {
+        const parsed = new URL(url);
+        if (parsed.hostname === "youtu.be") return parsed.pathname.slice(1);
+        if (parsed.searchParams.has("v")) return parsed.searchParams.get("v");
+        const parts = parsed.pathname.split("/");
+        const embedIndex = parts.indexOf("embed");
+        if (embedIndex !== -1 && parts[embedIndex + 1]) return parts[embedIndex + 1];
+      } catch (e) {
+        console.warn("URL解析エラー:", e);
+      }
+      return null;
+    }
+
     async function fetchVideoTitle(videoId) {
       try {
         const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`);
         const data = await res.json();
         if (data && data.title) videoTitle = data.title.replace(/[\\/:*?"<>|]/g, "");
       } catch {}
-    }
-
-    function extractVideoId(url) {
-      const match = url.match(/(?:v=|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/);
-      return match ? match[1] : null;
     }
 
     document.getElementById("loadBtn").addEventListener("click", async () => {
