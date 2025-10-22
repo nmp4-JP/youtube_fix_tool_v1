@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YouTube 修正コメント管理ツール v13+</title>
+  <title>YouTube 修正コメント管理ツール v13++（履歴表示対応）</title>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     body {
@@ -11,9 +11,16 @@
       margin: 0;
       padding: 20px;
       display: flex;
-      gap: 20px;
+      flex-direction: column;
       height: 100vh;
       box-sizing: border-box;
+    }
+
+    .main-container {
+      display: flex;
+      gap: 20px;
+      flex: 1;
+      overflow: hidden;
     }
 
     .video-section {
@@ -147,34 +154,76 @@
     #excelInput {
       display: none;
     }
+
+    /* 下部の履歴表示エリア */
+    .history-section {
+      border-top: 2px solid #ccc;
+      margin-top: 15px;
+      padding-top: 10px;
+      background: #fafafa;
+      height: 200px;
+      overflow-y: auto;
+    }
+
+    .history-entry {
+      margin-bottom: 10px;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: white;
+    }
+
+    .history-entry h4 {
+      margin: 0 0 5px 0;
+      font-size: 1em;
+      color: #007bff;
+    }
+
+    .history-entry ul {
+      max-height: 120px;
+      overflow-y: auto;
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .history-entry li {
+      border: none;
+      font-size: 0.9em;
+    }
   </style>
 </head>
 <body>
-  <div class="video-section">
-    <div class="video-url-input">
-      <input id="youtubeUrl" type="text" placeholder="YouTubeのURLを入力" />
-      <button id="loadBtn">読み込み</button>
+  <div class="main-container">
+    <div class="video-section">
+      <div class="video-url-input">
+        <input id="youtubeUrl" type="text" placeholder="YouTubeのURLを入力" />
+        <button id="loadBtn">読み込み</button>
+      </div>
+
+      <div id="player-container"><div id="player"></div></div>
+
+      <div class="comment-input">
+        <input id="commentText" type="text" placeholder="修正コメントを入力（⌘+Enter で追加）" />
+        <button id="addComment">追加</button>
+      </div>
+
+      <div class="button-group">
+        <button id="undoBtn" class="btn">↩️ 戻る</button>
+        <button id="clearBtn" class="btn">🗑️ オールクリア</button>
+        <button id="importBtn" class="btn">📂 過去の修正ファイルを読み込み</button>
+        <input type="file" id="excelInput" accept=".xlsx" />
+        <button id="downloadBtn" class="btn">📄 修正リストをダウンロード</button>
+      </div>
     </div>
 
-    <div id="player-container"><div id="player"></div></div>
-
-    <div class="comment-input">
-      <input id="commentText" type="text" placeholder="修正コメントを入力（⌘+Enter で追加）" />
-      <button id="addComment">追加</button>
-    </div>
-
-    <div class="button-group">
-      <button id="undoBtn" class="btn">↩️ 戻る</button>
-      <button id="clearBtn" class="btn">🗑️ オールクリア</button>
-      <button id="importBtn" class="btn">📥 Excelを読み込み</button>
-      <input type="file" id="excelInput" accept=".xlsx" />
-      <button id="downloadBtn" class="btn">📄 修正リストをダウンロード</button>
+    <div class="comment-section">
+      <h3>修正コメント一覧</h3>
+      <ul id="commentList"></ul>
     </div>
   </div>
 
-  <div class="comment-section">
-    <h3>修正コメント一覧</h3>
-    <ul id="commentList"></ul>
+  <div class="history-section" id="historySection">
+    <h3>📜 読み込んだ修正ファイル一覧</h3>
   </div>
 
   <script src="https://www.youtube.com/iframe_api"></script>
@@ -185,15 +234,12 @@
     let videoTitle = "YouTube動画";
     let currentVideoId = null;
 
-    // --- YouTubeプレイヤー ---
     function onYouTubeIframeAPIReady() {
       player = new YT.Player("player", {
         width: "100%",
         height: "100%",
         videoId: "dQw4w9WgXcQ",
-        events: {
-          onReady: () => fetchVideoTitle(player.getVideoData().video_id)
-        }
+        events: { onReady: () => fetchVideoTitle(player.getVideoData().video_id) }
       });
     }
 
@@ -202,9 +248,7 @@
         const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`);
         const data = await res.json();
         if (data && data.title) videoTitle = data.title.replace(/[\\/:*?"<>|]/g, "");
-      } catch (e) {
-        console.warn("動画タイトルを取得できませんでした:", e);
-      }
+      } catch {}
     }
 
     function extractVideoId(url) {
@@ -234,7 +278,7 @@
       if (historyStack.length > 20) historyStack.shift();
     }
 
-    function undo() {
+    document.getElementById("undoBtn").addEventListener("click", () => {
       if (historyStack.length > 0) {
         comments = JSON.parse(historyStack.pop());
         saveComments();
@@ -242,9 +286,7 @@
       } else {
         alert("戻せる履歴がありません。");
       }
-    }
-
-    document.getElementById("undoBtn").addEventListener("click", undo);
+    });
 
     function addComment() {
       if (!player || !player.getCurrentTime) return;
@@ -259,7 +301,6 @@
     }
 
     document.getElementById("addComment").addEventListener("click", addComment);
-
     document.getElementById("commentText").addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
@@ -323,10 +364,7 @@
     });
 
     document.getElementById("downloadBtn").addEventListener("click", () => {
-      if (comments.length === 0) {
-        alert("コメントがありません。");
-        return;
-      }
+      if (comments.length === 0) return alert("コメントがありません。");
       const data = [
         { 修正済み: "", タイムコード: "", 修正コメント: "", 追記事項: "" },
         ...comments.map((c) => ({
@@ -347,6 +385,7 @@
       a.click();
     });
 
+    // 📂 過去ファイル読み込み → 下部リスト表示
     document.getElementById("importBtn").addEventListener("click", () => {
       document.getElementById("excelInput").click();
     });
@@ -358,25 +397,27 @@
       const wb = XLSX.read(data, { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(ws);
-      const added = json
-        .filter((r) => r["タイムコード"] && r["修正コメント"])
-        .map((r) => ({
-          id: Date.now() + Math.random(),
-          time: parseTime(r["タイムコード"]),
-          text: r["修正コメント"],
-          note: r["追記事項"] || ""
-        }));
-      backupState();
-      comments = [...comments, ...added];
-      saveComments();
-      renderComments(true);
+      displayHistory(file.name, json);
       e.target.value = "";
     });
 
-    function parseTime(str) {
-      if (!str) return 0;
-      const [m, s] = str.split(":").map(Number);
-      return m * 60 + s;
+    function displayHistory(filename, rows) {
+      const history = document.getElementById("historySection");
+      const entry = document.createElement("div");
+      entry.className = "history-entry";
+      const title = document.createElement("h4");
+      title.textContent = `📁 ${filename}`;
+      const list = document.createElement("ul");
+      rows
+        .filter((r) => r["タイムコード"] && r["修正コメント"])
+        .forEach((r) => {
+          const li = document.createElement("li");
+          li.textContent = `[${r["タイムコード"]}] ${r["修正コメント"]} ${r["追記事項"] ? "（追記: " + r["追記事項"] + "）" : ""}`;
+          list.appendChild(li);
+        });
+      entry.appendChild(title);
+      entry.appendChild(list);
+      history.appendChild(entry);
     }
 
     function saveComments() {
